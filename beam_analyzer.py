@@ -145,42 +145,40 @@ def plot_beam_geometry_and_loads(beam_props, beam_loads, output_path='plots/beam
             ax.text(span, -text_y_offset, support_parts[1], ha='center', va='top')
 
     # Applied UDLs
-    if 'UDL' in beam_loads:
-        for udl in beam_loads['UDL']:
-            mag = udl['Magnitude']
-            load_name = udl['Load name']
-            start_x = udl['Start'] if udl['Full/Partial'].lower() == 'partial' and udl['Start'] is not None else 0
-            end_x = udl['End'] if udl['Full/Partial'].lower() == 'partial' and udl['End'] is not None else span
+    for udl in beam_loads.get('UDL', []): # Use .get for robustness
+        mag = udl['Magnitude']
+        load_name = udl['Load name']
+        start_x = udl['Start'] if udl['Full/Partial'].lower() == 'partial' and udl['Start'] is not None else 0
+        end_x = udl['End'] if udl['Full/Partial'].lower() == 'partial' and udl['End'] is not None else span # Corrected indentation
 
-            # Draw rectangle for UDL (above the beam line)
-            ax.add_patch(plt.Rectangle((start_x, 0), end_x - start_x, udl_rect_height, facecolor='skyblue', edgecolor='dodgerblue', alpha=0.7))
+        # Draw rectangle for UDL (above the beam line)
+        ax.add_patch(plt.Rectangle((start_x, 0), end_x - start_x, udl_rect_height, facecolor='skyblue', edgecolor='dodgerblue', alpha=0.7))
 
-            # Arrows for UDL representation (pointing downwards onto the rectangle)
-            num_udl_arrows = max(2, int((end_x - start_x) / (span/8))) # Adjust arrow density
-            for i in range(num_udl_arrows + 1):
-                arrow_x = start_x + i * (end_x - start_x) / num_udl_arrows
-                # Arrow from slightly above rectangle, pointing into it
-                ax.arrow(arrow_x, udl_rect_height * 1.1, 0, -udl_rect_height * 0.3,
-                         head_width=load_arrow_head_width*0.7, head_length=load_arrow_head_length*0.7,
-                         fc='dodgerblue', ec='dodgerblue', lw=0.8)
+        # Arrows for UDL representation (pointing downwards onto the rectangle)
+        num_udl_arrows = max(2, int((end_x - start_x) / (span/8))) # Adjust arrow density
+        for i in range(num_udl_arrows + 1):
+            arrow_x = start_x + i * (end_x - start_x) / num_udl_arrows
+            # Arrow from slightly above rectangle, pointing into it
+            ax.arrow(arrow_x, udl_rect_height * 1.1, 0, -udl_rect_height * 0.3,
+                     head_width=load_arrow_head_width*0.7, head_length=load_arrow_head_length*0.7,
+                     fc='dodgerblue', ec='dodgerblue', lw=0.8)
 
-            ax.text((start_x + end_x) / 2, udl_rect_height * 1.2, f"{load_name}: {mag} kN/m",
-                    ha='center', va='bottom', color='dodgerblue', fontsize=9)
+        ax.text((start_x + end_x) / 2, udl_rect_height * 1.2, f"{load_name}: {mag} kN/m",
+                ha='center', va='bottom', color='dodgerblue', fontsize=9)
 
     # Applied Point Loads
-    if 'Point Load' in beam_loads:
-        for pl_idx, pl in enumerate(beam_loads['Point Load']):
-            mag = pl['Magnitude']
-            load_name = pl['Load name']
-            pos_x = pl['Start']
-            # Stagger text for closely spaced point loads if needed (simple y-offset here)
-            text_y_pl_offset = point_load_arrow_length * 1.1 + (pl_idx % 2 * base_y_offset * 0.8)
+    for pl_idx, pl in enumerate(beam_loads.get('Point Load', [])): # Use .get for robustness
+        mag = pl['Magnitude']
+        load_name = pl['Load name']
+        pos_x = pl['Start']
+        # Stagger text for closely spaced point loads if needed (simple y-offset here)
+        text_y_pl_offset = point_load_arrow_length * 1.1 + (pl_idx % 2 * base_y_offset * 0.8)
 
-            ax.arrow(pos_x, point_load_arrow_length, 0, -point_load_arrow_length,
+        ax.arrow(pos_x, point_load_arrow_length, 0, -point_load_arrow_length,
                      head_width=load_arrow_head_width, head_length=load_arrow_head_length,
                      fc='crimson', ec='crimson', lw=1.5)
-            ax.text(pos_x, text_y_pl_offset, f"{load_name}: {mag} kN",
-                    ha='center', va='bottom', color='crimson', fontsize=9)
+        ax.text(pos_x, text_y_pl_offset, f"{load_name}: {mag} kN",
+                ha='center', va='bottom', color='crimson', fontsize=9) # Corrected indentation
 
     ax.set_xlim(-0.1 * span, 1.1 * span)
     # Adjust ylim to ensure all elements are visible
@@ -370,23 +368,56 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
         for gk_udl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('UDL', [])):
             factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
         for qk_udl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('UDL', [])):
-            factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
-        # Point loads
+            if qk_udl['Load name'] in load_case_map:
+                factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+
+        # Point loads - Permanent
+        for gk_pl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('Point Load', [])):
+            if gk_pl['Load name'] in load_case_map:
+                factors[load_case_map[gk_pl['Load name']]] = combo['Permanent factor']
+        # Point loads - Live
+        for qk_pl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('Point Load', [])):
+            if qk_pl['Load name'] in load_case_map:
+                factors[load_case_map[qk_pl['Load name']]] = combo['Live factor']
+        # Point loads - Snow
         for sk_pl in filter(lambda l: l['Load type'] == 'snow', beam_loads.get('Point Load', [])):
-            factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
-        # Add other types (wind) if present in JSON and model
+            if sk_pl['Load name'] in load_case_map:
+                factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+        # Add other types (wind) if present in JSON and model (e.g., Point loads - Wind)
+        # for wk_pl in filter(lambda l: l['Load type'] == 'wind', beam_loads.get('Point Load', [])):
+        #     if wk_pl['Load name'] in load_case_map:
+        #         factors[load_case_map[wk_pl['Load name']]] = combo['Wind factor']
         model.add_load_combo(combo_name, factors)
 
     # SLS Combinations
     for i, combo in enumerate(load_combos['SLS']['Combinations']):
         combo_name = f'SLS{i+1}'
         factors = {}
+        # UDLs - Permanent
         for gk_udl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('UDL', [])):
-            factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
+            if gk_udl['Load name'] in load_case_map:
+                factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
+        # UDLs - Live
         for qk_udl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('UDL', [])):
-            factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+            if qk_udl['Load name'] in load_case_map:
+                factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+
+        # Point loads - Permanent
+        for gk_pl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('Point Load', [])):
+            if gk_pl['Load name'] in load_case_map:
+                factors[load_case_map[gk_pl['Load name']]] = combo['Permanent factor']
+        # Point loads - Live
+        for qk_pl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('Point Load', [])):
+            if qk_pl['Load name'] in load_case_map:
+                factors[load_case_map[qk_pl['Load name']]] = combo['Live factor']
+        # Point loads - Snow
         for sk_pl in filter(lambda l: l['Load type'] == 'snow', beam_loads.get('Point Load', [])):
-            factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+            if sk_pl['Load name'] in load_case_map:
+                factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+        # Point loads - Wind (example)
+        # for wk_pl in filter(lambda l: l['Load type'] == 'wind', beam_loads.get('Point Load', [])):
+        #     if wk_pl['Load name'] in load_case_map:
+        #         factors[load_case_map[wk_pl['Load name']]] = combo['Wind factor']
         model.add_load_combo(combo_name, factors)
 
     # 9. Analyze
@@ -739,6 +770,17 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
     print(f"Plots saved in 'plots' directory.")
 
 if __name__ == '__main__':
-    run_beam_analysis()
-    # For testing, you can call it directly.
-    # Example: run_beam_analysis(input_file='beam_input.json', output_docx='Final_Beam_Report.docx')
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run Timber Beam Analysis.")
+    parser.add_argument('--input', type=str, default='beam_input.json',
+                        help='Path to the input JSON file (default: beam_input.json)')
+    parser.add_argument('--output', type=str, default='beam_analysis_report.docx',
+                        help='Path to save the output DOCX report (default: beam_analysis_report.docx)')
+
+    args = parser.parse_args()
+
+    run_beam_analysis(input_file=args.input, output_docx=args.output)
+    # Example:
+    # python beam_analyzer.py --input beam_input_no_pl.json --output report_no_pl.docx
+    # python beam_analyzer.py --input beam_input_multi_pl.json --output report_multi_pl.docx
