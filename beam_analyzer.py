@@ -110,77 +110,94 @@ def plot_beam_geometry_and_loads(beam_props, beam_loads, output_path='plots/beam
 
     # Support N0 (at x=0)
     if len(support_parts) > 0:
-        s0_type = support_parts[0].lower().strip() # Standardize for comparison
-        if "xyz" == s0_type: # Pinned
-            ax.plot(0, 0, 'k^', markersize=10, label='Pinned Support')
-            ax.text(0, -text_y_offset, "Pinned", ha='center', va='top')
-        elif "y" == s0_type and "x" not in s0_type and "z" not in s0_type : # Roller Y
-            ax.plot(0, 0, 'ko', markersize=10, mfc='white', label='Roller Support') # Circle for roller
-            ax.plot([-0.02*span, 0.02*span], [-base_y_offset*0.3], 'k-', lw=1) # Line underneath roller
-            ax.text(0, -text_y_offset, "Roller (Y)", ha='center', va='top')
-        elif "xyzxyz" == s0_type: # Fully fixed (all translational and rotational)
-            ax.plot([0,0], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2) # Vertical line
+        s_type_raw = support_parts[0] # Keep raw for text label
+        s_type_proc = s_type_raw.strip() # Processed for logic, no .lower() to distinguish X/Y/Z from x/y/z
+
+        has_x_trans = 'x' in s_type_proc
+        has_y_trans = 'y' in s_type_proc
+        has_z_trans = 'z' in s_type_proc
+        has_any_trans = has_x_trans or has_y_trans or has_z_trans
+
+        has_x_rot = 'X' in s_type_proc
+        has_y_rot = 'Y' in s_type_proc
+        has_z_rot = 'Z' in s_type_proc
+        has_any_rot = has_x_rot or has_y_rot or has_z_rot
+
+        if has_any_rot: # If any rotational restraint, draw as Fixed
+            ax.plot([0,0], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2)
             ax.fill_between([-0.05*span, 0], [-base_y_offset*0.5, -base_y_offset*0.5], [base_y_offset*0.5, base_y_offset*0.5], color='dimgray', hatch='///')
-            ax.text(0, -text_y_offset, "Fixed", ha='center', va='top')
-        else: # Default/Other/Custom
-            ax.plot(0, 0, 'ks', markersize=8, label='Support') # Square for other/custom
-            ax.text(0, -text_y_offset, support_parts[0], ha='center', va='top')
+        elif has_y_trans and not has_x_trans and not has_z_trans: # Roller Y (only Y translation fixed, no rotation)
+            ax.plot(0, 0, 'ko', markersize=10, mfc='white')
+            ax.plot([-0.02*span, 0.02*span], [-base_y_offset*0.3, -base_y_offset*0.3], 'k-', lw=1) # Corrected Y for line
+        elif has_any_trans: # Pinned (any translational fixed, no rotation)
+            ax.plot(0, 0, 'k^', markersize=10)
+        else: # Default/Other or no restraint
+            ax.plot(0, 0, 'ks', markersize=8) # Square for other/custom or no symbol if preferred
+        ax.text(0, -text_y_offset, s_type_raw, ha='center', va='top')
+
 
     # Support N1 (at x=span)
     if len(support_parts) > 1:
-        s1_type = support_parts[1].lower().strip() # Standardize
-        if "xyz" == s1_type: # Pinned
-            ax.plot(span, 0, 'k^', markersize=10)
-            ax.text(span, -text_y_offset, "Pinned", ha='center', va='top')
-        elif "y" == s1_type and "x" not in s1_type and "z" not in s1_type: # Roller Y
-            ax.plot(span, 0, 'ko', markersize=10, mfc='white')
-            ax.plot([span - 0.02*span, span + 0.02*span], [-base_y_offset*0.3], 'k-', lw=1)
-            ax.text(span, -text_y_offset, "Roller (Y)", ha='center', va='top')
-        elif "xyzxyz" == s1_type: # Fully fixed
+        s_type_raw = support_parts[1] # Keep raw for text label
+        s_type_proc = s_type_raw.strip()
+
+        has_x_trans = 'x' in s_type_proc
+        has_y_trans = 'y' in s_type_proc
+        has_z_trans = 'z' in s_type_proc
+        has_any_trans = has_x_trans or has_y_trans or has_z_trans
+
+        has_x_rot = 'X' in s_type_proc
+        has_y_rot = 'Y' in s_type_proc
+        has_z_rot = 'Z' in s_type_proc
+        has_any_rot = has_x_rot or has_y_rot or has_z_rot
+
+        if has_any_rot: # If any rotational restraint, draw as Fixed
             ax.plot([span,span], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2)
             ax.fill_between([span, span+0.05*span], [-base_y_offset*0.5, -base_y_offset*0.5], [base_y_offset*0.5, base_y_offset*0.5], color='dimgray', hatch='///')
-            ax.text(span, -text_y_offset, "Fixed", ha='center', va='top')
+        elif has_y_trans and not has_x_trans and not has_z_trans: # Roller Y
+            ax.plot(span, 0, 'ko', markersize=10, mfc='white')
+            ax.plot([span - 0.02*span, span + 0.02*span], [-base_y_offset*0.3, -base_y_offset*0.3], 'k-', lw=1) # Corrected Y for line
+        elif has_any_trans: # Pinned
+            ax.plot(span, 0, 'k^', markersize=10)
         else: # Default/Other
             ax.plot(span, 0, 'ks', markersize=8)
-            ax.text(span, -text_y_offset, support_parts[1], ha='center', va='top')
+        ax.text(span, -text_y_offset, s_type_raw, ha='center', va='top')
 
     # Applied UDLs
-    if 'UDL' in beam_loads:
-        for udl in beam_loads['UDL']:
-            mag = udl['Magnitude']
-            load_name = udl['Load name']
-            start_x = udl['Start'] if udl['Full/Partial'].lower() == 'partial' and udl['Start'] is not None else 0
-            end_x = udl['End'] if udl['Full/Partial'].lower() == 'partial' and udl['End'] is not None else span
+    for udl in beam_loads.get('UDL', []): # Use .get for robustness
+        mag = udl['Magnitude']
+        load_name = udl['Load name']
+        start_x = udl['Start'] if udl['Full/Partial'].lower() == 'partial' and udl['Start'] is not None else 0
+        end_x = udl['End'] if udl['Full/Partial'].lower() == 'partial' and udl['End'] is not None else span # Corrected indentation
 
-            # Draw rectangle for UDL (above the beam line)
-            ax.add_patch(plt.Rectangle((start_x, 0), end_x - start_x, udl_rect_height, facecolor='skyblue', edgecolor='dodgerblue', alpha=0.7))
+        # Draw rectangle for UDL (above the beam line)
+        ax.add_patch(plt.Rectangle((start_x, 0), end_x - start_x, udl_rect_height, facecolor='skyblue', edgecolor='dodgerblue', alpha=0.7))
 
-            # Arrows for UDL representation (pointing downwards onto the rectangle)
-            num_udl_arrows = max(2, int((end_x - start_x) / (span/8))) # Adjust arrow density
-            for i in range(num_udl_arrows + 1):
-                arrow_x = start_x + i * (end_x - start_x) / num_udl_arrows
-                # Arrow from slightly above rectangle, pointing into it
-                ax.arrow(arrow_x, udl_rect_height * 1.1, 0, -udl_rect_height * 0.3,
-                         head_width=load_arrow_head_width*0.7, head_length=load_arrow_head_length*0.7,
-                         fc='dodgerblue', ec='dodgerblue', lw=0.8)
+        # Arrows for UDL representation (pointing downwards onto the rectangle)
+        num_udl_arrows = max(2, int((end_x - start_x) / (span/8))) # Adjust arrow density
+        for i in range(num_udl_arrows + 1):
+            arrow_x = start_x + i * (end_x - start_x) / num_udl_arrows
+            # Arrow from slightly above rectangle, pointing into it
+            ax.arrow(arrow_x, udl_rect_height * 1.1, 0, -udl_rect_height * 0.3,
+                     head_width=load_arrow_head_width*0.7, head_length=load_arrow_head_length*0.7,
+                     fc='dodgerblue', ec='dodgerblue', lw=0.8)
 
-            ax.text((start_x + end_x) / 2, udl_rect_height * 1.2, f"{load_name}: {mag} kN/m",
-                    ha='center', va='bottom', color='dodgerblue', fontsize=9)
+        ax.text((start_x + end_x) / 2, udl_rect_height * 1.2, f"{load_name}: {mag} kN/m",
+                ha='center', va='bottom', color='dodgerblue', fontsize=9)
 
     # Applied Point Loads
-    if 'Point Load' in beam_loads:
-        for pl_idx, pl in enumerate(beam_loads['Point Load']):
-            mag = pl['Magnitude']
-            load_name = pl['Load name']
-            pos_x = pl['Start']
-            # Stagger text for closely spaced point loads if needed (simple y-offset here)
-            text_y_pl_offset = point_load_arrow_length * 1.1 + (pl_idx % 2 * base_y_offset * 0.8)
+    for pl_idx, pl in enumerate(beam_loads.get('Point Load', [])): # Use .get for robustness
+        mag = pl['Magnitude']
+        load_name = pl['Load name']
+        pos_x = pl['Start']
+        # Stagger text for closely spaced point loads if needed (simple y-offset here)
+        text_y_pl_offset = point_load_arrow_length * 1.1 + (pl_idx % 2 * base_y_offset * 0.8)
 
-            ax.arrow(pos_x, point_load_arrow_length, 0, -point_load_arrow_length,
+        ax.arrow(pos_x, point_load_arrow_length, 0, -point_load_arrow_length,
                      head_width=load_arrow_head_width, head_length=load_arrow_head_length,
                      fc='crimson', ec='crimson', lw=1.5)
-            ax.text(pos_x, text_y_pl_offset, f"{load_name}: {mag} kN",
-                    ha='center', va='bottom', color='crimson', fontsize=9)
+        ax.text(pos_x, text_y_pl_offset, f"{load_name}: {mag} kN",
+                ha='center', va='bottom', color='crimson', fontsize=9) # Corrected indentation
 
     ax.set_xlim(-0.1 * span, 1.1 * span)
     # Adjust ylim to ensure all elements are visible
@@ -362,6 +379,13 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
 
 
     # 8. Define Load Combinations
+    # First, create "combinations" for each base load case to ensure they are solved individually
+    # This will allow us to get their unfactored reactions.
+    for lc_name_in_map, pynite_lc_name in load_case_map.items():
+        # Create a new combo name, e.g., " réaction_permanent_Gk1" to avoid clashes if user names combos like base cases
+        reaction_combo_name = f"REAC_{pynite_lc_name}"
+        model.add_load_combo(reaction_combo_name, {pynite_lc_name: 1.0})
+
     # ULS Combinations
     for i, combo in enumerate(load_combos['ULS']['Combinations']):
         combo_name = f'ULS{i+1}'
@@ -370,23 +394,56 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
         for gk_udl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('UDL', [])):
             factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
         for qk_udl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('UDL', [])):
-            factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
-        # Point loads
+            if qk_udl['Load name'] in load_case_map:
+                factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+
+        # Point loads - Permanent
+        for gk_pl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('Point Load', [])):
+            if gk_pl['Load name'] in load_case_map:
+                factors[load_case_map[gk_pl['Load name']]] = combo['Permanent factor']
+        # Point loads - Live
+        for qk_pl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('Point Load', [])):
+            if qk_pl['Load name'] in load_case_map:
+                factors[load_case_map[qk_pl['Load name']]] = combo['Live factor']
+        # Point loads - Snow
         for sk_pl in filter(lambda l: l['Load type'] == 'snow', beam_loads.get('Point Load', [])):
-            factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
-        # Add other types (wind) if present in JSON and model
+            if sk_pl['Load name'] in load_case_map:
+                factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+        # Add other types (wind) if present in JSON and model (e.g., Point loads - Wind)
+        # for wk_pl in filter(lambda l: l['Load type'] == 'wind', beam_loads.get('Point Load', [])):
+        #     if wk_pl['Load name'] in load_case_map:
+        #         factors[load_case_map[wk_pl['Load name']]] = combo['Wind factor']
         model.add_load_combo(combo_name, factors)
 
     # SLS Combinations
     for i, combo in enumerate(load_combos['SLS']['Combinations']):
         combo_name = f'SLS{i+1}'
         factors = {}
+        # UDLs - Permanent
         for gk_udl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('UDL', [])):
-            factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
+            if gk_udl['Load name'] in load_case_map:
+                factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
+        # UDLs - Live
         for qk_udl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('UDL', [])):
-            factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+            if qk_udl['Load name'] in load_case_map:
+                factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+
+        # Point loads - Permanent
+        for gk_pl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('Point Load', [])):
+            if gk_pl['Load name'] in load_case_map:
+                factors[load_case_map[gk_pl['Load name']]] = combo['Permanent factor']
+        # Point loads - Live
+        for qk_pl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('Point Load', [])):
+            if qk_pl['Load name'] in load_case_map:
+                factors[load_case_map[qk_pl['Load name']]] = combo['Live factor']
+        # Point loads - Snow
         for sk_pl in filter(lambda l: l['Load type'] == 'snow', beam_loads.get('Point Load', [])):
-            factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+            if sk_pl['Load name'] in load_case_map:
+                factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+        # Point loads - Wind (example)
+        # for wk_pl in filter(lambda l: l['Load type'] == 'wind', beam_loads.get('Point Load', [])):
+        #     if wk_pl['Load name'] in load_case_map:
+        #         factors[load_case_map[wk_pl['Load name']]] = combo['Wind factor']
         model.add_load_combo(combo_name, factors)
 
     # 9. Analyze
@@ -526,7 +583,7 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
             all_shear_points_for_envelope.append({'x': x_start_global, 'y': shear_start, 'combo': combo_name})
             all_shear_points_for_envelope.append({'x': x_end_global, 'y': shear_end, 'combo': combo_name})
 
-        plt.plot(current_plot_x_shear, current_plot_y_shear, label=f'{combo_name} Shear Fy', linestyle='--')
+        # plt.plot(current_plot_x_shear, current_plot_y_shear, label=f'{combo_name} Shear Fy', linestyle='--') # Commented out to show only envelope
         min_shear_overall = min(min_shear_overall, min(current_plot_y_shear))
         max_shear_overall = max(max_shear_overall, max(current_plot_y_shear))
 
@@ -592,14 +649,18 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
 
     # --- Unfactored Support Reactions ---
     unfactored_reactions = {}
-    base_load_cases = list(load_case_map.values()) # e.g., ['permanent_Gk1', 'live_Qk1', 'snow_Sk1']
+    # Iterate through the original load case map to get the base PyniteFEA load case names
+    # e.g., load_case_map might be {'Gk1': 'permanent_Gk1', 'Qk1': 'live_Qk1'}
+    for user_lc_name, pynite_base_lc_name in load_case_map.items():
+        reaction_combo_name = f"REAC_{pynite_base_lc_name}" # This is the combo we created for individual analysis
 
-    for lc_name in base_load_cases:
-        # Reaction at N0
-        rxn_N0_FY = model.nodes['N0'].RxnFY.get(lc_name, 0) / 1000 # Corrected: Nodes -> nodes; kN
+        # Reaction at N0 for this specific "reaction combination"
+        rxn_N0_FY = model.nodes['N0'].RxnFY.get(reaction_combo_name, 0) / 1000 # kN
         # Reaction at N1
-        rxn_N1_FY = model.nodes['N1'].RxnFY.get(lc_name, 0) / 1000 # Corrected: Nodes -> nodes; kN
-        unfactored_reactions[lc_name] = {'N0_Fy (kN)': rxn_N0_FY, 'N1_Fy (kN)': rxn_N1_FY}
+        rxn_N1_FY = model.nodes['N1'].RxnFY.get(reaction_combo_name, 0) / 1000 # kN
+
+        # Store reactions using the original user-facing load name (e.g., Gk1) or the pynite base lc name for clarity
+        unfactored_reactions[user_lc_name] = {'N0_Fy (kN)': rxn_N0_FY, 'N1_Fy (kN)': rxn_N1_FY}
 
 
     # 11. Generate DOCX Report
@@ -725,9 +786,10 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
         hdr_cells_rxn[0].text = 'Load Case'
         hdr_cells_rxn[1].text = 'Support N0 Reaction (kN)'
         hdr_cells_rxn[2].text = 'Support N1 Reaction (kN)'
-        for lc, rxns in unfactored_reactions.items():
+        # The keys in unfactored_reactions are now user_lc_name like "Gk1", "Qk1"
+        for user_lc_name, rxns in unfactored_reactions.items():
             row_cells = reaction_table.add_row().cells
-            row_cells[0].text = lc
+            row_cells[0].text = user_lc_name # Display the original load name
             row_cells[1].text = f"{rxns['N0_Fy (kN)']:.2f}"
             row_cells[2].text = f"{rxns['N1_Fy (kN)']:.2f}"
     else:
@@ -739,6 +801,17 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
     print(f"Plots saved in 'plots' directory.")
 
 if __name__ == '__main__':
-    run_beam_analysis()
-    # For testing, you can call it directly.
-    # Example: run_beam_analysis(input_file='beam_input.json', output_docx='Final_Beam_Report.docx')
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Run Timber Beam Analysis.")
+    parser.add_argument('--input', type=str, default='beam_input.json',
+                        help='Path to the input JSON file (default: beam_input.json)')
+    parser.add_argument('--output', type=str, default='beam_analysis_report.docx',
+                        help='Path to save the output DOCX report (default: beam_analysis_report.docx)')
+
+    args = parser.parse_args()
+
+    run_beam_analysis(input_file=args.input, output_docx=args.output)
+    # Example:
+    # python beam_analyzer.py --input beam_input_no_pl.json --output report_no_pl.docx
+    # python beam_analyzer.py --input beam_input_multi_pl.json --output report_multi_pl.docx
