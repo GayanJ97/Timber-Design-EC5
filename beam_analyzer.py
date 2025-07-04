@@ -8,15 +8,21 @@ import os
 
 # --- Helper Functions ---
 def parse_support_conditions(support_str):
-    """Parses the support condition string 'xyz,xyz' into PyniteFEA compatible format."""
-    # PyniteFEA uses True for fixed and False for released.
-    # 'xyz' means fixed in x, y, z translations.
-    # 'XYZ' means fixed in x, y, z rotations.
-    # For typical single span beam, N0 is often pinned (x,y fixed, z free, rotations free)
-    # and N1 is roller (y fixed, x,z free, rotations free) or also pinned.
-    # The input "xyz,xyz" implies both supports are fully fixed translationally.
-    # Rotational restraints are not specified by lowercase 'xyz'. Assuming rotations are free.
+    """
+    Parses the support condition string (e.g., 'xyz,xyz' or 'xyz,y' or 'XYZ,xyz')
+    into PyniteFEA compatible format.
 
+    Lowercase 'x', 'y', 'z' define translational restraints (True if present).
+    Uppercase 'X', 'Y', 'Z' define rotational restraints (True if present).
+
+    Examples:
+    - "xyz": Pinned support (UX, UY, UZ = True; RX, RY, RZ = False)
+    - "y": Roller support allowing X, Z translation and all rotations (UY = True)
+    - "XYZ": Fixed support for rotations only (RX, RY, RZ = True; UX, UY, UZ = False - unusual standalone)
+    - "xyzXYZ": Fully fixed support (all True)
+
+    PyniteFEA def_support arguments: UX, UY, UZ, RX, RY, RZ (True for fixed, False for released)
+    """
     conditions = []
     parts = support_str.split(',')
     for part in parts:
@@ -81,6 +87,128 @@ def add_load_combination_factors(doc, combo_type, combinations_data):
         for j, key in enumerate(factor_keys_ordered):
             row_cells[j+1].text = str(combo.get(key, 0)) # Use .get for safety
 
+def plot_beam_geometry_and_loads(beam_props, beam_loads, output_path='plots/beam_geometry_loads.png'):
+    """Plots the beam geometry, supports, and applied loads using matplotlib."""
+    span = float(beam_props['Span'])
+    support_conditions_str = beam_props['Support conditions']
+
+    fig, ax = plt.subplots(figsize=(12, 4)) # Adjusted figure size for better layout
+
+    # Beam line
+    ax.plot([0, span], [0, 0], 'k-', lw=3) # Beam as a thick black line at y=0
+
+    # --- Define Y-offsets and symbol sizes relative to span for responsiveness ---
+    base_y_offset = 0.05 * span  # Base offset for symbols from beam line
+    text_y_offset = base_y_offset * 1.3 # Offset for text below symbols
+    load_arrow_head_width = 0.02 * span
+    load_arrow_head_length = 0.03 * span
+    udl_rect_height = 0.06 * span # Height of UDL rectangle above beam
+    point_load_arrow_length = udl_rect_height * 1.5 # Length of point load arrow stem
+
+    # Support symbols
+    support_parts = support_conditions_str.split(',')
+
+    # Support N0 (at x=0)
+    if len(support_parts) > 0:
+        s0_type = support_parts[0].lower().strip() # Standardize for comparison
+        if "xyz" == s0_type: # Pinned
+            ax.plot(0, 0, 'k^', markersize=10, label='Pinned Support')
+            ax.text(0, -text_y_offset, "Pinned", ha='center', va='top')
+        elif "y" == s0_type and "x" not in s0_type and "z" not in s0_type : # Roller Y
+            ax.plot(0, 0, 'ko', markersize=10, mfc='white', label='Roller Support') # Circle for roller
+            ax.plot([-0.02*span, 0.02*span], [-base_y_offset*0.3], 'k-', lw=1) # Line underneath roller
+            ax.text(0, -text_y_offset, "Roller (Y)", ha='center', va='top')
+        elif "xyzxyz" == s0_type: # Fully fixed (all translational and rotational)
+            ax.plot([0,0], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2) # Vertical line
+            ax.fill_between([-0.05*span, 0], [-base_y_offset*0.5, -base_y_offset*0.5], [base_y_offset*0.5, base_y_offset*0.5], color='dimgray', hatch='///')
+            ax.text(0, -text_y_offset, "Fixed", ha='center', va='top')
+        else: # Default/Other/Custom
+            ax.plot(0, 0, 'ks', markersize=8, label='Support') # Square for other/custom
+            ax.text(0, -text_y_offset, support_parts[0], ha='center', va='top')
+
+    # Support N1 (at x=span)
+    if len(support_parts) > 1:
+        s1_type = support_parts[1].lower().strip() # Standardize
+        if "xyz" == s1_type: # Pinned
+            ax.plot(span, 0, 'k^', markersize=10)
+            ax.text(span, -text_y_offset, "Pinned", ha='center', va='top')
+        elif "y" == s1_type and "x" not in s1_type and "z" not in s1_type: # Roller Y
+            ax.plot(span, 0, 'ko', markersize=10, mfc='white')
+            ax.plot([span - 0.02*span, span + 0.02*span], [-base_y_offset*0.3], 'k-', lw=1)
+            ax.text(span, -text_y_offset, "Roller (Y)", ha='center', va='top')
+        elif "xyzxyz" == s1_type: # Fully fixed
+            ax.plot([span,span], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2)
+            ax.fill_between([span, span+0.05*span], [-base_y_offset*0.5, -base_y_offset*0.5], [base_y_offset*0.5, base_y_offset*0.5], color='dimgray', hatch='///')
+            ax.text(span, -text_y_offset, "Fixed", ha='center', va='top')
+        else: # Default/Other
+            ax.plot(span, 0, 'ks', markersize=8)
+            ax.text(span, -text_y_offset, support_parts[1], ha='center', va='top')
+
+    # Applied UDLs
+    if 'UDL' in beam_loads:
+        for udl in beam_loads['UDL']:
+            mag = udl['Magnitude']
+            load_name = udl['Load name']
+            start_x = udl['Start'] if udl['Full/Partial'].lower() == 'partial' and udl['Start'] is not None else 0
+            end_x = udl['End'] if udl['Full/Partial'].lower() == 'partial' and udl['End'] is not None else span
+
+            # Draw rectangle for UDL (above the beam line)
+            ax.add_patch(plt.Rectangle((start_x, 0), end_x - start_x, udl_rect_height, facecolor='skyblue', edgecolor='dodgerblue', alpha=0.7))
+
+            # Arrows for UDL representation (pointing downwards onto the rectangle)
+            num_udl_arrows = max(2, int((end_x - start_x) / (span/8))) # Adjust arrow density
+            for i in range(num_udl_arrows + 1):
+                arrow_x = start_x + i * (end_x - start_x) / num_udl_arrows
+                # Arrow from slightly above rectangle, pointing into it
+                ax.arrow(arrow_x, udl_rect_height * 1.1, 0, -udl_rect_height * 0.3,
+                         head_width=load_arrow_head_width*0.7, head_length=load_arrow_head_length*0.7,
+                         fc='dodgerblue', ec='dodgerblue', lw=0.8)
+
+            ax.text((start_x + end_x) / 2, udl_rect_height * 1.2, f"{load_name}: {mag} kN/m",
+                    ha='center', va='bottom', color='dodgerblue', fontsize=9)
+
+    # Applied Point Loads
+    if 'Point Load' in beam_loads:
+        for pl_idx, pl in enumerate(beam_loads['Point Load']):
+            mag = pl['Magnitude']
+            load_name = pl['Load name']
+            pos_x = pl['Start']
+            # Stagger text for closely spaced point loads if needed (simple y-offset here)
+            text_y_pl_offset = point_load_arrow_length * 1.1 + (pl_idx % 2 * base_y_offset * 0.8)
+
+            ax.arrow(pos_x, point_load_arrow_length, 0, -point_load_arrow_length,
+                     head_width=load_arrow_head_width, head_length=load_arrow_head_length,
+                     fc='crimson', ec='crimson', lw=1.5)
+            ax.text(pos_x, text_y_pl_offset, f"{load_name}: {mag} kN",
+                    ha='center', va='bottom', color='crimson', fontsize=9)
+
+    ax.set_xlim(-0.1 * span, 1.1 * span)
+    # Adjust ylim to ensure all elements are visible
+    min_y_lim = -text_y_offset - base_y_offset # Space for support text
+    max_y_lim = udl_rect_height * 1.5 + base_y_offset # Space for UDL text and point loads
+    if 'Point Load' in beam_loads and beam_loads['Point Load']: # Check if point loads exist
+         max_y_lim = max(max_y_lim, point_load_arrow_length * 1.2 + max( (idx % 2 * base_y_offset*0.8) for idx in range(len(beam_loads['Point Load'])) ) + base_y_offset)
+
+
+    ax.set_ylim(min_y_lim, max_y_lim)
+    ax.set_xlabel("Position along beam (m)")
+    ax.set_yticks([]) # Hide y-axis ticks as it's schematic
+    ax.set_title("Beam Configuration: Geometry, Supports, and Loads", fontsize=12)
+    ax.spines['left'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.spines['top'].set_visible(False)
+    plt.tight_layout(pad=1.5) # Add padding
+
+    # Ensure plots directory exists
+    plots_dir = os.path.dirname(output_path)
+    if not os.path.exists(plots_dir) and plots_dir: # Check if plots_dir is not empty
+        os.makedirs(plots_dir)
+
+    plt.savefig(output_path)
+    plt.close(fig)
+    print(f"Beam geometry diagram saved to {output_path}")
+
+
 # --- Main Analysis Function ---
 def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_report.docx'):
     """Runs the entire beam analysis and generates a DOCX report."""
@@ -99,6 +227,10 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
     load_combos = data['Load combinations']
 
     span = float(beam_props['Span'])
+
+    # ** Plot beam geometry and loads **
+    plot_beam_geometry_and_loads(beam_props, beam_loads, output_path='plots/beam_geometry_loads.png')
+
 
     # 2. Initialize PyniteFEA Model
     model = FEModel3D()
@@ -440,7 +572,7 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
     # Typically interested in max magnitude of deflection
     max_abs_deflection_sls = max(np.abs(env_sls_deflection_max).max(), np.abs(env_sls_deflection_min).max())
     # Find the actual max deflection (most negative for downward)
-    max_downward_deflection_sls = np.min(env_sls_deflection_min) # Corrected variable name
+    max_downward_deflection_sls = np.min(env_sls_deflection_min) # Corrected: env_uls_deflection_min -> env_sls_deflection_min
 
 
     plt.figure(figsize=(10, 6))
@@ -477,7 +609,26 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
     # Beam Geometry
     doc.add_heading('Beam Geometry', level=1)
     doc.add_paragraph(f"Span: {beam_props['Span']} m")
-    doc.add_paragraph(f"Support conditions (N0, N1): {beam_props['Support conditions']}") # Could be more descriptive
+    support_desc = beam_props['Support conditions']
+    # Provide a slightly more descriptive interpretation for common cases in the report
+    desc_parts = []
+    for part in support_desc.split(','):
+        if part == "xyz":
+            desc_parts.append("Pinned (fixed translation xyz, free rotation)")
+        elif part == "y":
+            desc_parts.append("Roller (fixed translation y, free translation xz, free rotation)")
+        elif part == "xyzXYZ":
+            desc_parts.append("Fixed (fixed translation xyz, fixed rotation XYZ)")
+        else:
+            desc_parts.append(f"Custom ({part})") # Default for other combinations
+    doc.add_paragraph(f"Support conditions (N0, N1): {support_desc} (Interpreted as: {', '.join(desc_parts)})")
+
+    # Add Beam Configuration Diagram
+    try:
+        doc.add_picture('plots/beam_geometry_loads.png', width=Inches(6.5))
+    except FileNotFoundError:
+        doc.add_paragraph("[Beam geometry and loading diagram not found]")
+
 
     # Section Detail
     doc.add_heading('Section Detail', level=1)
@@ -529,9 +680,6 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
             row_cells[1].text = pl['Load type']
             row_cells[2].text = str(pl['Magnitude'])
             row_cells[3].text = str(pl['Start'])
-
-    # TODO: Loading detail diagram (conceptual - could be a simple matplotlib plot of loads vs span)
-    # For now, the tables above describe the loads.
 
     # Load Combinations
     doc.add_heading('Load Combinations', level=1)
