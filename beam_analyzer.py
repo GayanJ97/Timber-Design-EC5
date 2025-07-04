@@ -1,0 +1,596 @@
+import json
+from Pynite import FEModel3D
+import matplotlib.pyplot as plt
+from docx import Document
+from docx.shared import Inches
+import numpy as np
+import os
+
+# --- Helper Functions ---
+def parse_support_conditions(support_str):
+    """Parses the support condition string 'xyz,xyz' into PyniteFEA compatible format."""
+    # PyniteFEA uses True for fixed and False for released.
+    # 'xyz' means fixed in x, y, z translations.
+    # 'XYZ' means fixed in x, y, z rotations.
+    # For typical single span beam, N0 is often pinned (x,y fixed, z free, rotations free)
+    # and N1 is roller (y fixed, x,z free, rotations free) or also pinned.
+    # The input "xyz,xyz" implies both supports are fully fixed translationally.
+    # Rotational restraints are not specified by lowercase 'xyz'. Assuming rotations are free.
+
+    conditions = []
+    parts = support_str.split(',')
+    for part in parts:
+        fixity = {
+            'UX': 'x' in part, 'UY': 'y' in part, 'UZ': 'z' in part,
+            'RX': 'X' in part, 'RY': 'Y' in part, 'RZ': 'Z' in part
+        }
+        conditions.append(fixity)
+    return conditions
+
+def generate_nodes(span, segment_length=0.1):
+    """Generates node coordinates: support nodes (N0, N1) and internal segment nodes."""
+    nodes = {'N0': (0, 0, 0), 'N1': (span, 0, 0)}
+    internal_nodes = {}
+    num_segments = int(span / segment_length)
+    for i in range(num_segments + 1): # Include the start and end points of segments
+        x_coord = i * segment_length
+        # Ensure we don't duplicate N0 or N1 if segment length aligns perfectly
+        if not np.isclose(x_coord, 0) and not np.isclose(x_coord, span):
+             # Check if x_coord is too close to span before adding
+            if x_coord < span:
+                 internal_nodes[f'n{i}'] = (x_coord, 0, 0)
+
+    # Sort internal nodes by x-coordinate to ensure order for plotting
+    sorted_internal_node_names = sorted(internal_nodes.keys(), key=lambda name: internal_nodes[name][0])
+
+    # Combine all nodes: N0, sorted internal nodes, N1
+    all_node_coords = {'N0': nodes['N0']}
+    for name in sorted_internal_node_names:
+        all_node_coords[name] = internal_nodes[name]
+    all_node_coords['N1'] = nodes['N1']
+
+    return all_node_coords
+
+def add_load_combination_factors(doc, combo_type, combinations_data):
+    """Adds load combination factors to the DOCX document."""
+    doc.add_heading(f'{combo_type} Load Combinations', level=2)
+    # No. of combinations: {combinations_data[f'No. of {combo_type} combinations']}"
+
+    # Table for combinations
+    num_combos = combinations_data[f'No. of {combo_type} combinations']
+    combos = combinations_data['Combinations']
+
+    if not combos:
+        doc.add_paragraph("No combinations defined.")
+        return
+
+    # Determine headers from the keys of the first combination, assuming consistency
+    # Ordered headers for better readability
+    factor_keys_ordered = ["Permanent factor", "Live factor", "Snow factor", "Wind factor"]
+    headers = ["Combination"] + factor_keys_ordered
+
+    table = doc.add_table(rows=1, cols=len(headers))
+    table.style = 'Table Grid'
+    hdr_cells = table.rows[0].cells
+    for i, header_name in enumerate(headers):
+        hdr_cells[i].text = header_name
+
+    for i, combo in enumerate(combos):
+        row_cells = table.add_row().cells
+        row_cells[0].text = f"{combo_type}{i+1}"
+        for j, key in enumerate(factor_keys_ordered):
+            row_cells[j+1].text = str(combo.get(key, 0)) # Use .get for safety
+
+# --- Main Analysis Function ---
+def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_report.docx'):
+    """Runs the entire beam analysis and generates a DOCX report."""
+
+    # Create a directory for plots if it doesn't exist
+    if not os.path.exists('plots'):
+        os.makedirs('plots')
+
+    # 1. Load Input Data
+    with open(input_file, 'r') as f:
+        data = json.load(f)
+
+    beam_props = data['Beam Properties']
+    timber_section = data['Timber Section']
+    beam_loads = data['Beam Loads']
+    load_combos = data['Load combinations']
+
+    span = float(beam_props['Span'])
+
+    # 2. Initialize PyniteFEA Model
+    model = FEModel3D()
+
+    # 3. Add Nodes
+    # Generate nodes at 100mm (0.1m) segments for detailed results
+    node_coords = generate_nodes(span, segment_length=0.1)
+    node_names_ordered = list(node_coords.keys()) # N0, n1, n2, ..., N1
+
+    for name, (x, y, z) in node_coords.items():
+        model.add_node(name, x, y, z)
+
+    # 4. Define Material and Section (PyniteFEA requires these)
+    # Using placeholder values for E and G for timber.
+    # These would be more specific if detailed timber design checks were performed.
+    # For deflection, E is important. G is for shear deformation (less critical for slender beams).
+    # Typical E for C24 might be around 11000 N/mm^2 (11e9 N/m^2).
+    # Area = (B*D) mm^2, Iz = (B*D^3)/12 mm^4
+    # For Pynite, units should be consistent (e.g., N, m)
+    E_val = 11e9  # N/m^2
+    G_val = 690e6   # N/m^2 (approx G for timber)
+    nu_val = 0.3 # Poisson's ratio (placeholder)
+    rho_val = 500 # kg/m^3 (placeholder density for C24)
+
+    model.add_material('TimberC24', E_val, G_val, nu_val, rho_val)
+
+    breadth_m = timber_section['Breadth'] / 1000 * timber_section['No. of Section']
+    depth_m = timber_section['Depth'] / 1000
+    Area = breadth_m * depth_m
+    Iz = (breadth_m * depth_m**3) / 12
+    Iy = (depth_m * breadth_m**3) / 12 # Moment of inertia about y-axis
+    J = Iy + Iz # Placeholder for torsional constant, less critical for 2D bending
+
+    # PyniteFEA add_section takes name and properties directly
+    # For a rectangular section, it primarily needs Area, Iz (bending about z), Iy (bending about y), and J (torsion)
+    # The add_rectangle_section was incorrect; instead, we define a general section.
+    model.add_section('TimberSection', Area, Iy, Iz, J)
+
+
+    # 5. Add Members
+    # Create one continuous member spanning all nodes for simplicity in PyniteFEA load application
+    # Or, create segments between each generated node.
+    # For now, one member from N0 to N1, results can be interpolated/queried at internal nodes.
+    # Let's try segments for more direct results at n_i nodes.
+    for i in range(len(node_names_ordered) - 1):
+        start_node = node_names_ordered[i]
+        end_node = node_names_ordered[i+1]
+        member_name = f"M{i}"
+        model.add_member(member_name, start_node, end_node, 'TimberC24', 'TimberSection')
+
+
+    # 6. Define Support Conditions
+    parsed_supports = parse_support_conditions(beam_props['Support conditions'])
+    if len(parsed_supports) >= 1:
+        model.def_support('N0', parsed_supports[0]['UX'], parsed_supports[0]['UY'], parsed_supports[0]['UZ'],
+                                parsed_supports[0]['RX'], parsed_supports[0]['RY'], parsed_supports[0]['RZ'])
+    if len(parsed_supports) >= 2:
+         model.def_support('N1', parsed_supports[1]['UX'], parsed_supports[1]['UY'], parsed_supports[1]['UZ'],
+                                parsed_supports[1]['RX'], parsed_supports[1]['RY'], parsed_supports[1]['RZ'])
+    else: # Default for N1 if only one condition provided (e.g. roller)
+        model.def_support('N1', False, True, False, False, False, False) # Roller in Y
+
+    # 7. Apply Loads (as separate load cases for Gk, Qk, Sk)
+    # PyniteFEA applies loads to members. We have one main member M_main from N0 to N1.
+    # Find the main member that spans the whole beam (or the first segment if applying to that)
+    # Since we created segments, we need to identify which segment(s) a load applies to.
+    # For simplicity of example, assume loads apply to the overall span N0-N1.
+    # PyniteFEA's add_member_dist_load and add_member_pt_load refer to the member's local axes.
+
+    # Find the member that starts at N0 to apply loads to, or iterate if loads are complex
+    # For UDLs and Point Loads, we need to iterate through members and apply partial loads if needed.
+
+    # Create base load cases
+    load_case_map = {} # To store mapping like "Gk1" -> "permanent_Gk1" for Pynite
+
+    # Unfactored Loads for Reactions
+    for udl in beam_loads.get('UDL', []):
+        lc_name = f"{udl['Load type']}_{udl['Load name']}"
+        load_case_map[udl['Load name']] = lc_name
+
+        start_coord = udl['Start'] if udl['Start'] is not None else 0
+        end_coord = udl['End'] if udl['End'] is not None else span
+        if udl['Full/Partial'].lower() == 'full':
+            start_coord = 0
+            end_coord = span
+
+        # Apply UDL to relevant segments
+        for i in range(len(node_names_ordered) - 1):
+            m_name = f"M{i}"
+            m_obj = model.members[m_name]
+            m_start_x = model.nodes[m_obj.i_node.name].X # Corrected: i_Node -> i_node
+            m_end_x = model.nodes[m_obj.j_node.name].X # Corrected: j_Node -> j_node
+
+            # Check if the UDL overlaps with this member segment
+            overlap_start = max(start_coord, m_start_x)
+            overlap_end = min(end_coord, m_end_x)
+
+            if overlap_end > overlap_start: # There is an overlap
+                # PyniteFEA dist load needs start and end magnitude, and positions along member length
+                # For a UDL, w_i = w_j = magnitude
+                # x_i, x_j are distances from the start of THIS member segment
+                load_x_i = max(0, start_coord - m_start_x)
+                load_x_j = min(m_obj.L(), end_coord - m_start_x)
+
+                if load_x_j > load_x_i: # Ensure the load portion is valid for this segment
+                    # Magnitude is negative for downward loads (local y-axis)
+                    # Convert magnitude from kN/m to N/m
+                    model.add_member_dist_load(m_name, 'Fy', -abs(udl['Magnitude'])*1000, -abs(udl['Magnitude'])*1000, load_x_i, load_x_j, lc_name)
+
+
+    for pl in beam_loads.get('Point Load', []):
+        lc_name = f"{pl['Load type']}_{pl['Load name']}"
+        load_case_map[pl['Load name']] = lc_name
+        pl_coord = pl['Start']
+
+        # Apply Point Load to the correct segment
+        for i in range(len(node_names_ordered) - 1):
+            m_name = f"M{i}"
+            m_obj = model.members[m_name] # Corrected: Members -> members
+            m_start_x = model.nodes[m_obj.i_node.name].X
+            m_end_x = model.nodes[m_obj.j_node.name].X
+
+            if m_start_x <= pl_coord < m_end_x or (np.isclose(pl_coord, m_end_x) and m_end_x == span):
+                load_x = pl_coord - m_start_x # Position along the member
+                # Magnitude is negative for downward loads
+                # Convert magnitude from kN to N
+                model.add_member_pt_load(m_name, 'Fy', -abs(pl['Magnitude'])*1000, load_x, lc_name)
+                break # Point load applied to one member
+
+
+    # 8. Define Load Combinations
+    # ULS Combinations
+    for i, combo in enumerate(load_combos['ULS']['Combinations']):
+        combo_name = f'ULS{i+1}'
+        factors = {}
+        # Map load types to their respective load cases generated earlier
+        for gk_udl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('UDL', [])):
+            factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
+        for qk_udl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('UDL', [])):
+            factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+        # Point loads
+        for sk_pl in filter(lambda l: l['Load type'] == 'snow', beam_loads.get('Point Load', [])):
+            factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+        # Add other types (wind) if present in JSON and model
+        model.add_load_combo(combo_name, factors)
+
+    # SLS Combinations
+    for i, combo in enumerate(load_combos['SLS']['Combinations']):
+        combo_name = f'SLS{i+1}'
+        factors = {}
+        for gk_udl in filter(lambda l: l['Load type'] == 'permanent', beam_loads.get('UDL', [])):
+            factors[load_case_map[gk_udl['Load name']]] = combo['Permanent factor']
+        for qk_udl in filter(lambda l: l['Load type'] == 'live', beam_loads.get('UDL', [])):
+            factors[load_case_map[qk_udl['Load name']]] = combo['Live factor']
+        for sk_pl in filter(lambda l: l['Load type'] == 'snow', beam_loads.get('Point Load', [])):
+            factors[load_case_map[sk_pl['Load name']]] = combo['Snow factor']
+        model.add_load_combo(combo_name, factors)
+
+    # 9. Analyze
+    # For simple beams, check_stability might not be strictly necessary but good for complex models.
+    # If it causes issues for this simple case, can be set to False.
+    try:
+        model.analyze(check_stability=False)
+    except Exception as e:
+        print(f"Analysis failed: {e}")
+        # Fallback if stability check causes issues with simple setup
+        # model.analyze(check_stability=False)
+
+
+    # 10. Extract Results and Plot
+    # Node coordinates for plotting
+    x_coords = np.array([model.nodes[name].X for name in node_names_ordered]) # Corrected: Nodes -> nodes
+
+    # --- ULS Bending Moment Envelope ---
+    uls_combo_names = [f'ULS{i+1}' for i in range(load_combos['ULS']['No. of ULS combinations'])]
+    all_uls_moments_Mz = []
+    for combo_name in uls_combo_names:
+        moments_at_nodes = []
+        for node_name in node_names_ordered:
+            # Get moment at the start of the member connected TO this node (if j-node)
+            # or end of member connected FROM this node (if i-node)
+            # PyniteFEA member results are typically at ends. For nodes, need to query connected members.
+            # Simpler: get member diagram for each segment and piece together.
+            # model.members[m_name].plot_moment('Mz', combo_name) gives plot object.
+            # We need data: model.members[m_name].moment_Mz(x, combo_name)
+
+            # For simplicity, let's get moments at the j-end of each segment
+            # This means the last node N1 won't have a "start of member" moment from this logic easily
+            # Instead, let's query at each node by finding the member ending at it or starting at it.
+
+            current_moment = 0
+            if node_name == 'N0': # Start of the beam
+                 # Moment at the start of the first member M0
+                 if 'M0' in model.members:
+                    current_moment = model.members['M0'].moment('Mz', 0, combo_name)  # Corrected method
+            elif node_name == 'N1': # End of the beam
+                # Moment at the end of the last member
+                last_member_name = f"M{len(node_names_ordered)-2}"
+                if last_member_name in model.members:
+                    current_moment = model.members[last_member_name].moment('Mz', model.members[last_member_name].L(), combo_name) # Corrected method
+            else: # Internal nodes
+                # Find member segment that *ends* at this node_name (e.g., node n_k is j_Node of M_{k-1})
+                # The node index for 'nk' is k. Member M{k-1} connects n{k-1} to nk.
+                node_idx_str = node_name[1:] # e.g., "n5" -> "5"
+                try:
+                    # Find member index that leads to this node
+                    # node_names_ordered = [N0, n1, n2, ..., N1]
+                    # If node_name is n_idx, it's the j-node of member M_{idx} (if N0 is M0's i-node)
+                    # Let's find the actual member index based on node_names_ordered
+                    current_node_list_idx = node_names_ordered.index(node_name)
+                    member_ending_at_node_name = f"M{current_node_list_idx - 1}"
+                    if member_ending_at_node_name in model.members:
+                         member_obj = model.members[member_ending_at_node_name]
+                         current_moment = member_obj.moment('Mz', member_obj.L(), combo_name) # Corrected method
+                    else: # Should not happen if nodes and members align
+                        current_moment = 0 # Fallback
+                except (ValueError, IndexError):
+                     current_moment = 0 # Fallback if node name parsing fails
+            moments_at_nodes.append(current_moment / 1000) # Convert N-m to kN-m
+        all_uls_moments_Mz.append(moments_at_nodes)
+
+    all_uls_moments_Mz = np.array(all_uls_moments_Mz)
+    env_uls_moment_max = np.max(all_uls_moments_Mz, axis=0)
+    env_uls_moment_min = np.min(all_uls_moments_Mz, axis=0)
+    max_Mz_uls = np.max(env_uls_moment_max)
+    min_Mz_uls = np.min(env_uls_moment_min)
+
+    plt.figure(figsize=(10, 6))
+    plt.plot(x_coords, env_uls_moment_max, label='Max Envelope Mz (ULS)', color='r')
+    plt.plot(x_coords, env_uls_moment_min, label='Min Envelope Mz (ULS)', color='b')
+    plt.fill_between(x_coords, env_uls_moment_min, env_uls_moment_max, color='red', alpha=0.1)
+    plt.xlabel('Position along beam (m)')
+    plt.ylabel('Bending Moment Mz (kN-m)')
+    plt.title('ULS Bending Moment Envelope')
+    plt.legend()
+    plt.grid(True)
+    plt.axhline(0, color='black', lw=0.5)
+    plt.savefig('plots/bending_moment_uls.png')
+    plt.close()
+
+    # --- ULS Shear Force Envelope ---
+    all_uls_shears_Fy = []
+    for combo_name in uls_combo_names:
+        shears_at_nodes_start = [] # Shear at start of segment
+        # shears_at_nodes_end = [] # Shear at end of segment
+        # Shear can be discontinuous. PyniteFEA gives V at start (x=0) and end (x=L) of member.
+        # We will plot two points per segment for shear
+
+        plot_x_shear = []
+        plot_y_shear = []
+
+        for i in range(len(node_names_ordered) - 1):
+            m_name = f"M{i}"
+            member = model.members[m_name]
+            x_start_global = model.nodes[member.i_node.name].X # Corrected: i_Node -> i_node
+            x_end_global = model.nodes[member.j_node.name].X # Corrected: j_Node -> j_node
+
+            # Shear at start of member segment
+            plot_x_shear.append(x_start_global)
+            plot_y_shear.append(member.shear('Fy', 0, combo_name) / 1000) # Corrected method; kN
+            # Shear at end of member segment
+            plot_x_shear.append(x_end_global)
+            plot_y_shear.append(member.shear('Fy', member.L(), combo_name) / 1000) # Corrected method; kN
+        all_uls_shears_Fy.append(np.array(plot_y_shear)) # Store y-values for envelope calculation
+
+    # This envelope calculation is tricky because x-coords are duplicated for shear steps
+    # For simplicity, let's find overall max/min shear from all combos and all points
+    # A more robust envelope would require careful handling of the stepped x-coords.
+
+    # Let's plot each ULS shear and then the envelope from those plots' data
+    plt.figure(figsize=(10, 6))
+    min_shear_overall = float('inf')
+    max_shear_overall = float('-inf')
+
+    # Store all (x,y) pairs for shear from all ULS combos
+    all_shear_points_for_envelope = []
+
+    for combo_idx, combo_name in enumerate(uls_combo_names):
+        current_plot_x_shear = []
+        current_plot_y_shear = []
+        for i in range(len(node_names_ordered) - 1):
+            m_name = f"M{i}"
+            member = model.members[m_name]
+            x_start_global = model.nodes[member.i_node.name].X # Corrected: i_Node -> i_node
+            x_end_global = model.nodes[member.j_node.name].X
+
+            shear_start = member.shear('Fy', 0, combo_name) / 1000 # Corrected method; kN
+            shear_end = member.shear('Fy', member.L(), combo_name) / 1000 # Corrected method; kN
+
+            current_plot_x_shear.extend([x_start_global, x_end_global])
+            current_plot_y_shear.extend([shear_start, shear_end])
+
+            all_shear_points_for_envelope.append({'x': x_start_global, 'y': shear_start, 'combo': combo_name})
+            all_shear_points_for_envelope.append({'x': x_end_global, 'y': shear_end, 'combo': combo_name})
+
+        plt.plot(current_plot_x_shear, current_plot_y_shear, label=f'{combo_name} Shear Fy', linestyle='--')
+        min_shear_overall = min(min_shear_overall, min(current_plot_y_shear))
+        max_shear_overall = max(max_shear_overall, max(current_plot_y_shear))
+
+    # Create envelope data (simplified: min/max at each unique x-coordinate)
+    unique_x_coords_shear = sorted(list(set(p['x'] for p in all_shear_points_for_envelope)))
+    env_uls_shear_max_y = []
+    env_uls_shear_min_y = []
+
+    for x_val in unique_x_coords_shear:
+        y_values_at_x = [p['y'] for p in all_shear_points_for_envelope if np.isclose(p['x'], x_val)]
+        env_uls_shear_max_y.append(max(y_values_at_x) if y_values_at_x else 0)
+        env_uls_shear_min_y.append(min(y_values_at_x) if y_values_at_x else 0)
+
+    plt.plot(unique_x_coords_shear, env_uls_shear_max_y, color='r', linewidth=1.5, label='Max Envelope Fy (ULS)')
+    plt.plot(unique_x_coords_shear, env_uls_shear_min_y, color='b', linewidth=1.5, label='Min Envelope Fy (ULS)')
+    plt.fill_between(unique_x_coords_shear, env_uls_shear_min_y, env_uls_shear_max_y, color='blue', alpha=0.1)
+
+    max_V_uls = max(env_uls_shear_max_y) if env_uls_shear_max_y else 0
+    min_V_uls = min(env_uls_shear_min_y) if env_uls_shear_min_y else 0
+
+    plt.xlabel('Position along beam (m)')
+    plt.ylabel('Shear Force Fy (kN)')
+    plt.title('ULS Shear Force Envelope')
+    plt.legend()
+    plt.grid(True)
+    plt.axhline(0, color='black', lw=0.5)
+    plt.savefig('plots/shear_force_uls.png')
+    plt.close()
+
+
+    # --- SLS Deflection Envelope (DY) ---
+    sls_combo_names = [f'SLS{i+1}' for i in range(load_combos['SLS']['No. of SLS combinations'])]
+    all_sls_deflections_dy = []
+    for combo_name in sls_combo_names:
+        # Get DY (vertical deflection) at each node
+        deflections = [model.nodes[name].DY[combo_name] * 1000 for name in node_names_ordered] # Corrected: Nodes -> nodes; Convert m to mm
+        all_sls_deflections_dy.append(deflections)
+
+    all_sls_deflections_dy = np.array(all_sls_deflections_dy)
+    env_sls_deflection_max = np.max(all_sls_deflections_dy, axis=0) # Max downward deflection (most negative)
+    env_sls_deflection_min = np.min(all_sls_deflections_dy, axis=0) # Max upward deflection (most positive or least negative)
+
+    # Typically interested in max magnitude of deflection
+    max_abs_deflection_sls = max(np.abs(env_sls_deflection_max).max(), np.abs(env_sls_deflection_min).max())
+    # Find the actual max deflection (most negative for downward)
+    max_downward_deflection_sls = np.min(env_sls_deflection_min) # Corrected variable name
+
+
+    plt.figure(figsize=(10, 6))
+    # Plotting min envelope (max downward deflection) and max envelope (max upward/least downward)
+    plt.plot(x_coords, env_sls_deflection_min, label='Min Envelope Dy (Max Downward) (SLS)', color='b')
+    plt.plot(x_coords, env_sls_deflection_max, label='Max Envelope Dy (Max Upward) (SLS)', color='r')
+    plt.fill_between(x_coords, env_sls_deflection_min, env_sls_deflection_max, color='green', alpha=0.1)
+    plt.xlabel('Position along beam (m)')
+    plt.ylabel('Deflection Dy (mm)')
+    plt.title('SLS Deflection Envelope')
+    plt.legend()
+    plt.grid(True)
+    plt.axhline(0, color='black', lw=0.5)
+    plt.gca().invert_yaxis() # Typically deflections are shown positive downwards
+    plt.savefig('plots/deflection_sls.png')
+    plt.close()
+
+    # --- Unfactored Support Reactions ---
+    unfactored_reactions = {}
+    base_load_cases = list(load_case_map.values()) # e.g., ['permanent_Gk1', 'live_Qk1', 'snow_Sk1']
+
+    for lc_name in base_load_cases:
+        # Reaction at N0
+        rxn_N0_FY = model.nodes['N0'].RxnFY.get(lc_name, 0) / 1000 # Corrected: Nodes -> nodes; kN
+        # Reaction at N1
+        rxn_N1_FY = model.nodes['N1'].RxnFY.get(lc_name, 0) / 1000 # Corrected: Nodes -> nodes; kN
+        unfactored_reactions[lc_name] = {'N0_Fy (kN)': rxn_N0_FY, 'N1_Fy (kN)': rxn_N1_FY}
+
+
+    # 11. Generate DOCX Report
+    doc = Document()
+    doc.add_heading('Timber Beam Analysis Report', level=0)
+
+    # Beam Geometry
+    doc.add_heading('Beam Geometry', level=1)
+    doc.add_paragraph(f"Span: {beam_props['Span']} m")
+    doc.add_paragraph(f"Support conditions (N0, N1): {beam_props['Support conditions']}") # Could be more descriptive
+
+    # Section Detail
+    doc.add_heading('Section Detail', level=1)
+    doc.add_paragraph(f"Timber Grade: {timber_section['Grade']}")
+    doc.add_paragraph(f"Number of Sections: {timber_section['No. of Section']}")
+    doc.add_paragraph(f"Breadth (b): {timber_section['Breadth']} mm (Total: {timber_section['Breadth'] * timber_section['No. of Section']} mm)")
+    doc.add_paragraph(f"Depth (h): {timber_section['Depth']} mm")
+
+    # Member details
+    doc.add_heading('Member Details', level=1)
+    doc.add_paragraph(f"Service Class: {timber_section['Service Class']}")
+    doc.add_paragraph(f"Length of Bearing: {timber_section['Length of Bearing']} mm")
+    # Load duration is not in the input JSON, so it's omitted or needs a placeholder.
+    # For now, omitting. Could say "Load Duration: As per load types (permanent, live, snow)"
+
+    # Applied Loadings
+    doc.add_heading('Applied Loadings', level=1)
+    # UDLs
+    if beam_loads.get('UDL'):
+        doc.add_paragraph("Uniformly Distributed Loads (UDLs):")
+        udl_table = doc.add_table(rows=1, cols=5)
+        udl_table.style = 'Table Grid'
+        hdr_cells_udl = udl_table.rows[0].cells
+        hdr_cells_udl[0].text = 'Load Name'
+        hdr_cells_udl[1].text = 'Load Type'
+        hdr_cells_udl[2].text = 'Magnitude (kN/m)'
+        hdr_cells_udl[3].text = 'Start (m)'
+        hdr_cells_udl[4].text = 'End (m)'
+        for udl in beam_loads['UDL']:
+            row_cells = udl_table.add_row().cells
+            row_cells[0].text = udl['Load name']
+            row_cells[1].text = udl['Load type']
+            row_cells[2].text = str(udl['Magnitude'])
+            row_cells[3].text = str(udl['Start'] if udl['Full/Partial'].lower() == 'partial' else 0)
+            row_cells[4].text = str(udl['End'] if udl['Full/Partial'].lower() == 'partial' else beam_props['Span'])
+    # Point Loads
+    if beam_loads.get('Point Load'):
+        doc.add_paragraph("Point Loads:")
+        pl_table = doc.add_table(rows=1, cols=4)
+        pl_table.style = 'Table Grid'
+        hdr_cells_pl = pl_table.rows[0].cells
+        hdr_cells_pl[0].text = 'Load Name'
+        hdr_cells_pl[1].text = 'Load Type'
+        hdr_cells_pl[2].text = 'Magnitude (kN)'
+        hdr_cells_pl[3].text = 'Position (m)'
+        for pl in beam_loads['Point Load']:
+            row_cells = pl_table.add_row().cells
+            row_cells[0].text = pl['Load name']
+            row_cells[1].text = pl['Load type']
+            row_cells[2].text = str(pl['Magnitude'])
+            row_cells[3].text = str(pl['Start'])
+
+    # TODO: Loading detail diagram (conceptual - could be a simple matplotlib plot of loads vs span)
+    # For now, the tables above describe the loads.
+
+    # Load Combinations
+    doc.add_heading('Load Combinations', level=1)
+    add_load_combination_factors(doc, "ULS", load_combos['ULS'])
+    add_load_combination_factors(doc, "SLS", load_combos['SLS'])
+
+
+    # Analysis Results
+    doc.add_heading('Analysis Results', level=1)
+
+    doc.add_heading('Maximum Bending Moment (ULS Envelope)', level=2)
+    doc.add_paragraph(f"Maximum Positive Bending Moment ( sagging): {max_Mz_uls:.2f} kN-m")
+    doc.add_paragraph(f"Maximum Negative Bending Moment (hogging): {min_Mz_uls:.2f} kN-m")
+    try:
+        doc.add_picture('plots/bending_moment_uls.png', width=Inches(6.0))
+    except FileNotFoundError:
+        doc.add_paragraph("[Bending moment plot not found]")
+
+    doc.add_heading('Maximum Shear Force (ULS Envelope)', level=2)
+    doc.add_paragraph(f"Maximum Positive Shear Force: {max_V_uls:.2f} kN")
+    doc.add_paragraph(f"Maximum Negative Shear Force: {min_V_uls:.2f} kN")
+    try:
+        doc.add_picture('plots/shear_force_uls.png', width=Inches(6.0))
+    except FileNotFoundError:
+        doc.add_paragraph("[Shear force plot not found]")
+
+    doc.add_heading('Maximum Deflection (SLS Envelope)', level=2)
+    # Max downward deflection is the most negative value from env_sls_deflection_min
+    doc.add_paragraph(f"Maximum Downward Deflection: {max_downward_deflection_sls:.2f} mm")
+    # Could also report max upward if relevant: max_upward_deflection = np.max(env_sls_deflection_max)
+    # doc.add_paragraph(f"Maximum Upward Deflection: {max_upward_deflection:.2f} mm")
+
+    try:
+        doc.add_picture('plots/deflection_sls.png', width=Inches(6.0))
+    except FileNotFoundError:
+        doc.add_paragraph("[Deflection plot not found]")
+
+    doc.add_heading('Unfactored Support Reactions (Vertical)', level=2)
+    if unfactored_reactions:
+        reaction_table = doc.add_table(rows=1, cols=3)
+        reaction_table.style = 'Table Grid'
+        hdr_cells_rxn = reaction_table.rows[0].cells
+        hdr_cells_rxn[0].text = 'Load Case'
+        hdr_cells_rxn[1].text = 'Support N0 Reaction (kN)'
+        hdr_cells_rxn[2].text = 'Support N1 Reaction (kN)'
+        for lc, rxns in unfactored_reactions.items():
+            row_cells = reaction_table.add_row().cells
+            row_cells[0].text = lc
+            row_cells[1].text = f"{rxns['N0_Fy (kN)']:.2f}"
+            row_cells[2].text = f"{rxns['N1_Fy (kN)']:.2f}"
+    else:
+        doc.add_paragraph("No unfactored reactions calculated or available.")
+
+    # Save Document
+    doc.save(output_docx)
+    print(f"Report saved to {output_docx}")
+    print(f"Plots saved in 'plots' directory.")
+
+if __name__ == '__main__':
+    run_beam_analysis()
+    # For testing, you can call it directly.
+    # Example: run_beam_analysis(input_file='beam_input.json', output_docx='Final_Beam_Report.docx')
