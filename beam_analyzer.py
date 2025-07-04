@@ -379,6 +379,13 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
 
 
     # 8. Define Load Combinations
+    # First, create "combinations" for each base load case to ensure they are solved individually
+    # This will allow us to get their unfactored reactions.
+    for lc_name_in_map, pynite_lc_name in load_case_map.items():
+        # Create a new combo name, e.g., " réaction_permanent_Gk1" to avoid clashes if user names combos like base cases
+        reaction_combo_name = f"REAC_{pynite_lc_name}"
+        model.add_load_combo(reaction_combo_name, {pynite_lc_name: 1.0})
+
     # ULS Combinations
     for i, combo in enumerate(load_combos['ULS']['Combinations']):
         combo_name = f'ULS{i+1}'
@@ -576,7 +583,7 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
             all_shear_points_for_envelope.append({'x': x_start_global, 'y': shear_start, 'combo': combo_name})
             all_shear_points_for_envelope.append({'x': x_end_global, 'y': shear_end, 'combo': combo_name})
 
-        plt.plot(current_plot_x_shear, current_plot_y_shear, label=f'{combo_name} Shear Fy', linestyle='--')
+        # plt.plot(current_plot_x_shear, current_plot_y_shear, label=f'{combo_name} Shear Fy', linestyle='--') # Commented out to show only envelope
         min_shear_overall = min(min_shear_overall, min(current_plot_y_shear))
         max_shear_overall = max(max_shear_overall, max(current_plot_y_shear))
 
@@ -642,14 +649,18 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
 
     # --- Unfactored Support Reactions ---
     unfactored_reactions = {}
-    base_load_cases = list(load_case_map.values()) # e.g., ['permanent_Gk1', 'live_Qk1', 'snow_Sk1']
+    # Iterate through the original load case map to get the base PyniteFEA load case names
+    # e.g., load_case_map might be {'Gk1': 'permanent_Gk1', 'Qk1': 'live_Qk1'}
+    for user_lc_name, pynite_base_lc_name in load_case_map.items():
+        reaction_combo_name = f"REAC_{pynite_base_lc_name}" # This is the combo we created for individual analysis
 
-    for lc_name in base_load_cases:
-        # Reaction at N0
-        rxn_N0_FY = model.nodes['N0'].RxnFY.get(lc_name, 0) / 1000 # Corrected: Nodes -> nodes; kN
+        # Reaction at N0 for this specific "reaction combination"
+        rxn_N0_FY = model.nodes['N0'].RxnFY.get(reaction_combo_name, 0) / 1000 # kN
         # Reaction at N1
-        rxn_N1_FY = model.nodes['N1'].RxnFY.get(lc_name, 0) / 1000 # Corrected: Nodes -> nodes; kN
-        unfactored_reactions[lc_name] = {'N0_Fy (kN)': rxn_N0_FY, 'N1_Fy (kN)': rxn_N1_FY}
+        rxn_N1_FY = model.nodes['N1'].RxnFY.get(reaction_combo_name, 0) / 1000 # kN
+
+        # Store reactions using the original user-facing load name (e.g., Gk1) or the pynite base lc name for clarity
+        unfactored_reactions[user_lc_name] = {'N0_Fy (kN)': rxn_N0_FY, 'N1_Fy (kN)': rxn_N1_FY}
 
 
     # 11. Generate DOCX Report
@@ -775,9 +786,10 @@ def run_beam_analysis(input_file='beam_input.json', output_docx='beam_analysis_r
         hdr_cells_rxn[0].text = 'Load Case'
         hdr_cells_rxn[1].text = 'Support N0 Reaction (kN)'
         hdr_cells_rxn[2].text = 'Support N1 Reaction (kN)'
-        for lc, rxns in unfactored_reactions.items():
+        # The keys in unfactored_reactions are now user_lc_name like "Gk1", "Qk1"
+        for user_lc_name, rxns in unfactored_reactions.items():
             row_cells = reaction_table.add_row().cells
-            row_cells[0].text = lc
+            row_cells[0].text = user_lc_name # Display the original load name
             row_cells[1].text = f"{rxns['N0_Fy (kN)']:.2f}"
             row_cells[2].text = f"{rxns['N1_Fy (kN)']:.2f}"
     else:
