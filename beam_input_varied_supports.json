@@ -1,0 +1,58 @@
+{
+  "Beam Properties": {
+    "Span": "4.0",
+    "Support conditions": "y,y"
+  },
+  "Timber Section": {
+    "Grade": "C24",
+    "No. of Section": 1,
+    "Breadth": 75,
+    "Depth": 225,
+    "Service Class": "SC1",
+    "Length of Bearing": 100
+  },
+  "Beam Loads": {
+    "UDL": [
+      {
+        "Load name": "Gk1",
+        "Load type": "permanent",
+        "Magnitude": 1.5,
+        "Full/Partial": "Full",
+        "Start": null,
+        "End": null
+      }
+    ],
+    "Point Load": [
+      {
+        "Load name": "Qk1",
+        "Load type": "live",
+        "Magnitude": 5.0,
+        "Start": 2.0
+      }
+    ]
+  },
+  "Load combinations": {
+    "ULS": {
+      "No. of ULS combinations": 1,
+      "Combinations": [
+        {
+          "Permanent factor": 1.35,
+          "Live factor": 1.5,
+          "Snow factor": 0,
+          "Wind factor": 0
+        }
+      ]
+    },
+    "SLS": {
+      "No. of SLS combinations": 1,
+      "Combinations": [
+        {
+          "Permanent factor": 1,
+          "Live factor": 1,
+          "Snow factor": 0,
+          "Wind factor": 0
+        }
+      ]
+    }
+  }
+}

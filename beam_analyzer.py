@@ -110,39 +110,58 @@ def plot_beam_geometry_and_loads(beam_props, beam_loads, output_path='plots/beam
 
     # Support N0 (at x=0)
     if len(support_parts) > 0:
-        s0_type = support_parts[0].lower().strip() # Standardize for comparison
-        if "xyz" == s0_type: # Pinned
-            ax.plot(0, 0, 'k^', markersize=10, label='Pinned Support')
-            ax.text(0, -text_y_offset, "Pinned", ha='center', va='top')
-        elif "y" == s0_type and "x" not in s0_type and "z" not in s0_type : # Roller Y
-            ax.plot(0, 0, 'ko', markersize=10, mfc='white', label='Roller Support') # Circle for roller
-            ax.plot([-0.02*span, 0.02*span], [-base_y_offset*0.3], 'k-', lw=1) # Line underneath roller
-            ax.text(0, -text_y_offset, "Roller (Y)", ha='center', va='top')
-        elif "xyzxyz" == s0_type: # Fully fixed (all translational and rotational)
-            ax.plot([0,0], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2) # Vertical line
+        s_type_raw = support_parts[0] # Keep raw for text label
+        s_type_proc = s_type_raw.strip() # Processed for logic, no .lower() to distinguish X/Y/Z from x/y/z
+
+        has_x_trans = 'x' in s_type_proc
+        has_y_trans = 'y' in s_type_proc
+        has_z_trans = 'z' in s_type_proc
+        has_any_trans = has_x_trans or has_y_trans or has_z_trans
+
+        has_x_rot = 'X' in s_type_proc
+        has_y_rot = 'Y' in s_type_proc
+        has_z_rot = 'Z' in s_type_proc
+        has_any_rot = has_x_rot or has_y_rot or has_z_rot
+
+        if has_any_rot: # If any rotational restraint, draw as Fixed
+            ax.plot([0,0], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2)
             ax.fill_between([-0.05*span, 0], [-base_y_offset*0.5, -base_y_offset*0.5], [base_y_offset*0.5, base_y_offset*0.5], color='dimgray', hatch='///')
-            ax.text(0, -text_y_offset, "Fixed", ha='center', va='top')
-        else: # Default/Other/Custom
-            ax.plot(0, 0, 'ks', markersize=8, label='Support') # Square for other/custom
-            ax.text(0, -text_y_offset, support_parts[0], ha='center', va='top')
+        elif has_y_trans and not has_x_trans and not has_z_trans: # Roller Y (only Y translation fixed, no rotation)
+            ax.plot(0, 0, 'ko', markersize=10, mfc='white')
+            ax.plot([-0.02*span, 0.02*span], [-base_y_offset*0.3, -base_y_offset*0.3], 'k-', lw=1) # Corrected Y for line
+        elif has_any_trans: # Pinned (any translational fixed, no rotation)
+            ax.plot(0, 0, 'k^', markersize=10)
+        else: # Default/Other or no restraint
+            ax.plot(0, 0, 'ks', markersize=8) # Square for other/custom or no symbol if preferred
+        ax.text(0, -text_y_offset, s_type_raw, ha='center', va='top')
+
 
     # Support N1 (at x=span)
     if len(support_parts) > 1:
-        s1_type = support_parts[1].lower().strip() # Standardize
-        if "xyz" == s1_type: # Pinned
-            ax.plot(span, 0, 'k^', markersize=10)
-            ax.text(span, -text_y_offset, "Pinned", ha='center', va='top')
-        elif "y" == s1_type and "x" not in s1_type and "z" not in s1_type: # Roller Y
-            ax.plot(span, 0, 'ko', markersize=10, mfc='white')
-            ax.plot([span - 0.02*span, span + 0.02*span], [-base_y_offset*0.3], 'k-', lw=1)
-            ax.text(span, -text_y_offset, "Roller (Y)", ha='center', va='top')
-        elif "xyzxyz" == s1_type: # Fully fixed
+        s_type_raw = support_parts[1] # Keep raw for text label
+        s_type_proc = s_type_raw.strip()
+
+        has_x_trans = 'x' in s_type_proc
+        has_y_trans = 'y' in s_type_proc
+        has_z_trans = 'z' in s_type_proc
+        has_any_trans = has_x_trans or has_y_trans or has_z_trans
+
+        has_x_rot = 'X' in s_type_proc
+        has_y_rot = 'Y' in s_type_proc
+        has_z_rot = 'Z' in s_type_proc
+        has_any_rot = has_x_rot or has_y_rot or has_z_rot
+
+        if has_any_rot: # If any rotational restraint, draw as Fixed
             ax.plot([span,span], [-base_y_offset*0.5, base_y_offset*0.5], 'k-', lw=2)
             ax.fill_between([span, span+0.05*span], [-base_y_offset*0.5, -base_y_offset*0.5], [base_y_offset*0.5, base_y_offset*0.5], color='dimgray', hatch='///')
-            ax.text(span, -text_y_offset, "Fixed", ha='center', va='top')
+        elif has_y_trans and not has_x_trans and not has_z_trans: # Roller Y
+            ax.plot(span, 0, 'ko', markersize=10, mfc='white')
+            ax.plot([span - 0.02*span, span + 0.02*span], [-base_y_offset*0.3, -base_y_offset*0.3], 'k-', lw=1) # Corrected Y for line
+        elif has_any_trans: # Pinned
+            ax.plot(span, 0, 'k^', markersize=10)
         else: # Default/Other
             ax.plot(span, 0, 'ks', markersize=8)
-            ax.text(span, -text_y_offset, support_parts[1], ha='center', va='top')
+        ax.text(span, -text_y_offset, s_type_raw, ha='center', va='top')
 
     # Applied UDLs
     for udl in beam_loads.get('UDL', []): # Use .get for robustness
